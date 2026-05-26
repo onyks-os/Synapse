@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Synapse — Live Node Map</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/h3-js@4.1.0/dist/h3-js.umd.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /* Manually set fonts for Tailwind */
+      .font-sans {
+        font-family: "Inter", sans-serif;
+      }
+      .font-mono {
+        font-family: "JetBrains Mono", "Fira Code", monospace;
+      }
+      /* Leaflet overrides */
+      .leaflet-tile {
+        filter: invert(1) hue-rotate(180deg) brightness(0.85) saturate(0.8);
+      }
+      .leaflet-container {
+        background: #0a0c12;
+      }
+      .cell-tooltip {
+        background: #13161e;
+        border: 1px solid #1e2330;
+        border-radius: 6px;
+        padding: 8px 12px;
+        font-family: "Inter", sans-serif;
+        font-size: 0.75rem;
+        color: #e2e8f0;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+      }
+      .cell-tooltip strong {
+        color: #4f8cff;
+      }
+      /* Custom pulse animation */
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 0.5;
+          transform: scale(1.5);
+        }
+      }
+      .animate-pulse-custom {
+        animation: pulse 2s ease-in-out infinite;
+      }
+    </style>
+  </head>
+  <body class="bg-[#0d0f14] text-[#e2e8f0] font-sans">
+    <div
+      id="layout"
+      class="grid h-screen grid-cols-[340px_1fr] grid-rows-[56px_1fr]"
+    >
+      <header
+        class="col-span-full flex items-center gap-3 border-b border-[#1e2330] bg-[#13161e] px-5"
+      >
+        <div
+          class="animate-pulse-custom h-[10px] w-[10px] rounded-full bg-[#4f8cff]"
+          style="box-shadow: 0 0 10px #4f8cff"
+        ></div>
+        <h1 class="text-base font-semibold tracking-wider flex items-center">
+          <span class="text-[#4f8cff]">Synapse</span> &nbsp;— Live Node Map
+          <div id="identity-badge" class="ml-4 flex items-center gap-2 px-3 py-1 rounded-full bg-[#1e2330] border border-[#2a3142] text-xs hidden">
+            <span class="text-[#e2e8f0]">ID:</span>
+            <span class="font-mono text-[#4f8cff] font-bold" id="ident-node-id"></span>
+            <span class="text-[#64748b] ml-1">📍 <span class="font-mono text-[10px]" id="ident-cell"></span></span>
+          </div>
+        </h1>
+        <div id="stats" class="ml-auto flex gap-6">
+          <div class="stat flex flex-col items-end">
+            <span
+              class="text-[0.65rem] font-medium uppercase tracking-[0.08em] text-[#64748b]"
+              >Cells</span
+            >
+            <span class="text-base font-bold text-[#4f8cff]" id="stat-cells"
+              >0</span
+            >
+          </div>
+          <div class="stat flex flex-col items-end">
+            <span
+              class="text-[0.65rem] font-medium uppercase tracking-[0.08em] text-[#64748b]"
+              >Alive</span
+            >
+            <span class="text-base font-bold text-[#00e676]" id="stat-alive"
+              >0</span
+            >
+          </div>
+          <div class="stat flex flex-col items-end">
+            <span
+              class="text-[0.65rem] font-medium uppercase tracking-[0.08em] text-[#64748b]"
+              >Faulty</span
+            >
+            <span class="text-base font-bold text-[#ffeb3b]" id="stat-faulty"
+              >0</span
+            >
+          </div>
+          <div class="stat flex flex-col items-end">
+            <span
+              class="text-[0.65rem] font-medium uppercase tracking-[0.08em] text-[#64748b]"
+              >Dead</span
+            >
+            <span class="text-base font-bold text-[#f44336]" id="stat-dead"
+              >0</span
+            >
+          </div>
+        </div>
+      </header>
+
+      <aside
+        id="sidebar"
+        class="flex flex-col overflow-hidden border-r border-[#1e2330] bg-[#13161e]"
+      >
+        <div
+          class="sidebar-header border-b border-[#1e2330] px-4 py-3.5 text-left text-[0.7rem] font-semibold uppercase tracking-[0.1em] text-[#64748b]"
+        >
+          Local Nodes (K-Ring)
+        </div>
+        <div
+          id="node-table-wrap"
+          class="flex-1 overflow-y-auto"
+          style="--scrollbar-bg: transparent; --scrollbar-thumb-bg: #1e2330"
+        >
+          <div
+            id="empty"
+            class="flex h-full flex-col items-center justify-center gap-2 text-sm text-[#64748b]"
+          >
+            <span class="text-3xl">📡</span>
+            <span>Waiting for sensors…</span>
+          </div>
+          <table id="node-table" class="w-full border-collapse text-xs">
+            <thead class="sticky top-0">
+              <tr>
+                <th
+                  class="border-b border-[#1e2330] bg-[#13161e] px-3 py-2 text-left text-[0.65rem] font-semibold uppercase tracking-[0.08em] text-[#64748b]"
+                >
+                  Node ID
+                </th>
+                <th
+                  class="border-b border-[#1e2330] bg-[#13161e] px-3 py-2 text-left text-[0.65rem] font-semibold uppercase tracking-[0.08em] text-[#64748b]"
+                >
+                  Status
+                </th>
+                <th
+                  class="border-b border-[#1e2330] bg-[#13161e] px-3 py-2 text-left text-[0.65rem] font-semibold uppercase tracking-[0.08em] text-[#64748b]"
+                >
+                  Cell
+                </th>
+                <th
+                  class="border-b border-[#1e2330] bg-[#13161e] px-3 py-2 text-left text-[0.65rem] font-semibold uppercase tracking-[0.08em] text-[#64748b]"
+                >
+                  Last Seen
+                </th>
+              </tr>
+            </thead>
+            <tbody id="node-tbody"></tbody>
+          </table>
+        </div>
+        
+        <div class="sidebar-header border-b border-t border-[#1e2330] px-4 py-3.5 text-left text-[0.7rem] font-semibold uppercase tracking-[0.1em] text-[#64748b] bg-[#0d0f14]">
+          Connected Peers
+        </div>
+        <div class="h-[30%] overflow-y-auto bg-[#0a0c12]" style="--scrollbar-bg: transparent; --scrollbar-thumb-bg: #1e2330">
+          <ul id="peer-list" class="p-3 space-y-2 text-xs font-mono">
+             <li class="text-[#64748b] p-2 text-center font-sans">Loading peers...</li>
+          </ul>
+        </div>
+      </aside>
+
+      <div id="map" class="h-full w-full bg-[#0a0c12]"></div>
+    </div>
+
+    <script>
+      // ── API fetch (optional Bearer from server-injected __Synapse_DASHBOARD_API_KEY) ────
+      let SynapseApiKey =
+        typeof window.__Synapse_DASHBOARD_API_KEY === "string"
+          ? window.__Synapse_DASHBOARD_API_KEY
+          : "";
+
+      try {
+        const stored = window.localStorage.getItem("Synapse_api_key");
+        if (stored && !SynapseApiKey) SynapseApiKey = stored;
+      } catch (_) {
+        /* localStorage might be blocked */
+      }
+
+      if (!SynapseApiKey) {
+        // If the server requires auth, the HTML injection will be absent.
+        // Ask the user for the API key so the dashboard can call /api/* securely.
+        const entered = window.prompt("Synapse API key required:");
+        if (entered) {
+          SynapseApiKey = entered;
+          try {
+            window.localStorage.setItem("Synapse_api_key", SynapseApiKey);
+          } catch (_) {
+            /* ignore */
+          }
+        }
+      }
+
+      function SynapseApiHeaders() {
+        const headers = {};
+        if (typeof SynapseApiKey === "string" && SynapseApiKey.length) {
+          headers["Authorization"] = "Bearer " + SynapseApiKey;
+        }
+        return headers;
+      }
+      function SynapseFetch(path) {
+        return fetch(path, { headers: SynapseApiHeaders() });
+      }
+
+      // ── Map init ──────────────────────────────────────────────────────────────
+      const map = L.map("map", {
+        zoomControl: true,
+        attributionControl: false,
+      }).setView([45.5, 10.0], 6);
+
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 18,
+      }).addTo(map);
+
+      // ── State ─────────────────────────────────────────────────────────────────
+      const polygonLayer = {}; // cell → Leaflet polygon
+
+      // ── Helpers ───────────────────────────────────────────────────────────────
+      function cellColor(alive, faulty, dead) {
+        if (faulty > 0 && dead === 0) return "#ffeb3b"; // faulty present, none dead
+        if (faulty > 0 && dead > 0) return "#ff9800"; // faulty + dead
+        if (dead === 0) return "#00e676"; // all alive
+        if (alive === 0 && faulty === 0) return "#f44336"; // all dead
+        return "#ff9800"; // alive+dead mixed
+      }
+
+      function timeAgo(ts) {
+        const d = Date.now() / 1000 - ts;
+        if (d < 2) return "now";
+        if (d < 60) return `${Math.floor(d)}s ago`;
+        return `${Math.floor(d / 60)}m ago`;
+      }
+
+      // ── Poll /api/v1/cells ───────────────────────────────────────────────────
+      async function updateCells() {
+        try {
+          const res = await SynapseFetch("/api/v1/cells");
+          const cells = await res.json();
+          const activeCells = new Set(Object.keys(cells));
+
+          // Remove stale polygons
+          for (const c of Object.keys(polygonLayer)) {
+            if (!activeCells.has(c)) {
+              polygonLayer[c].remove();
+              delete polygonLayer[c];
+            }
+          }
+
+          let totalAlive = 0,
+            totalFaulty = 0,
+            totalDead = 0;
+
+          for (const [cell, data] of Object.entries(cells)) {
+            totalAlive += data.alive;
+            totalFaulty += data.faulty || 0;
+            totalDead += data.dead;
+
+            const color = cellColor(data.alive, data.faulty || 0, data.dead);
+            const boundary = h3.cellToBoundary(cell);
+            const latlngs = boundary.map(([lat, lng]) => [lat, lng]);
+
+            const tooltipHtml = `
+              <div class="cell-tooltip">
+                <strong>${cell}</strong><br>
+                🟢 Alive: ${data.alive} &nbsp; 🟡 Faulty: ${data.faulty || 0} &nbsp; 🔴 Dead: ${data.dead}<br>
+                Nodes: ${data.nodes.join(", ")}
+              </div>`;
+
+            if (polygonLayer[cell]) {
+              polygonLayer[cell]
+                .setLatLngs(latlngs)
+                .setStyle({ color, fillColor: color })
+                .setTooltipContent(tooltipHtml);
+            } else {
+              polygonLayer[cell] = L.polygon(latlngs, {
+                color,
+                fillColor: color,
+                fillOpacity: 0.35,
+                weight: 1.5,
+                opacity: 0.7,
+              })
+                .bindTooltip(tooltipHtml, { sticky: true, className: "" })
+                .addTo(map);
+            }
+          }
+
+          document.getElementById("stat-cells").textContent = activeCells.size;
+          document.getElementById("stat-alive").textContent = totalAlive;
+          document.getElementById("stat-faulty").textContent = totalFaulty;
+          document.getElementById("stat-dead").textContent = totalDead;
+        } catch (_) {
+          /* monitor may be restarting */
+        }
+      }
+
+      // ── Poll /api/v1/nodes ───────────────────────────────────────────────────
+      async function updateTable() {
+        try {
+          const res = await SynapseFetch("/api/v1/nodes");
+          const nodes = await res.json();
+          const tbody = document.getElementById("node-tbody");
+          const empty = document.getElementById("empty");
+          const table = document.getElementById("node-table");
+
+          if (nodes.length === 0) {
+            empty.style.display = "flex";
+            table.style.display = "none";
+            return;
+          }
+          empty.style.display = "none";
+          table.style.display = "";
+
+          nodes.sort((a, b) => b.last_seen - a.last_seen);
+          tbody.innerHTML = nodes
+            .map((n) => {
+              const statusClass =
+                n.status === "ALIVE"
+                  ? "bg-[rgba(0,230,118,0.15)] text-[#00e676]"
+                  : n.status === "FAULTY"
+                    ? "bg-[rgba(255,235,59,0.15)] text-[#ffeb3b]"
+                    : "bg-[rgba(244,67,54,0.15)] text-[#f44336]";
+
+              return `
+                <tr class="border-b border-[#1e2330] transition-colors hover:bg-[rgba(79,140,255,0.06)]">
+                  <td class="px-3 py-[7px] align-middle font-mono text-sm text-[#4f8cff]">
+                    ${n.node_id}
+                  </td>
+                  <td class="px-3 py-[7px] align-middle">
+                    <span class="inline-block rounded-full px-[7px] py-[2px] text-[0.65rem] font-semibold tracking-wider ${statusClass}">
+                      ${n.status}
+                    </span>
+                  </td>
+                  <td class="px-3 py-[7px] align-middle font-mono text-[0.65rem] text-[#64748b]">
+                    ${n.h3_cell ? n.h3_cell.slice(0, 10) + "…" : "—"}
+                  </td>
+                  <td class="px-3 py-[7px] align-middle text-sm text-[#64748b]">
+                    ${timeAgo(n.last_seen)}
+                  </td>
+                </tr>`;
+            })
+            .join("");
+        } catch (_) {
+          /* monitor may be restarting */
+        }
+      }
+
+      // ── Poll /api/v1/identity ────────────────────────────────────────────────
+      async function updateIdentity() {
+        try {
+          const res = await SynapseFetch("/api/v1/identity");
+          if (!res.ok) return;
+          const ident = await res.json();
+          if (ident && ident.node_id) {
+            document.getElementById("identity-badge").classList.remove("hidden");
+            document.getElementById("ident-node-id").textContent = ident.node_id;
+            document.getElementById("ident-cell").textContent = ident.h3_cell;
+            
+            if (!window._mapCentered && ident.lat && ident.lon) {
+               map.setView([ident.lat, ident.lon], 9);
+               window._mapCentered = true;
+            }
+          }
+        } catch (_) {}
+      }
+
+      // ── Poll /api/v1/peers ───────────────────────────────────────────────────
+      async function updatePeers() {
+        try {
+          const res = await SynapseFetch("/api/v1/peers");
+          if (!res.ok) return;
+          const peers = await res.json();
+          const list = document.getElementById("peer-list");
+          if (!peers || peers.length === 0) {
+              list.innerHTML = '<li class="text-[#64748b] p-2 text-center text-xs font-sans">No peers connected</li>';
+              return;
+          }
+          list.innerHTML = peers.map(p => {
+              const url = p.dashboard_url || "#";
+              const link = p.dashboard_url 
+                ? `<a href="${url}" target="_blank" class="text-[#00e676] bg-[rgba(0,230,118,0.1)] px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider hover:bg-[rgba(0,230,118,0.2)] transition-colors">Dash ↗</a>` 
+                : '<span class="text-[#64748b] text-[10px]">No Dash</span>';
+              return `<li class="flex justify-between items-center p-2 rounded bg-[#13161e] border border-[#1e2330]">
+                <span>
+                  <span class="text-[#e2e8f0] font-semibold">${p.node_id || "Unknown"}</span>
+                  <span class="text-[10px] text-[#64748b] block mt-0.5">Cell: ${p.h3_cell ? p.h3_cell.slice(0,10) + "…" : "?"}</span>
+                </span>
+                ${link}
+              </li>`;
+          }).join("");
+        } catch (_) {}
+      }
+
+      // ── Main loop ─────────────────────────────────────────────────────────────
+      async function tick() {
+        if (!window._identLoaded) {
+           await updateIdentity();
+           window._identLoaded = true;
+        }
+        await Promise.all([updateCells(), updateTable(), updatePeers()]);
+      }
+
+      tick();
+      setInterval(tick, 2000);
+    </script>
+  </body>
+</html>

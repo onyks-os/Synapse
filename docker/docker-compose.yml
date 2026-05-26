@@ -1,0 +1,92 @@
+services:
+  node-1:
+    restart: unless-stopped
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    ports:
+      - "8081:8080"
+      - "5551:5555"
+    environment: &node_env
+      SYNAPSE_ZMQ_PORT: 5555
+      DASHBOARD_PORT: 8080
+      DASHBOARD_HOST: "0.0.0.0"
+      EXTERNAL_DASHBOARD_URL: "http://localhost:8081"
+      SYNAPSE_DISCOVERY: beacon
+      LAT_MIN: 45.46
+      LAT_MAX: 45.47
+      LON_MIN: 9.18
+      LON_MAX: 9.20
+      PING_INTERVAL: 2.0
+      H3_RESOLUTION: 7
+      DEATH_TIMEOUT: 6.0
+      EVICTION_TTL: 10.0
+      CORROBORATION_METHOD: "${CORROBORATION_METHOD:-mad}"
+      ANOMALY_ZSCORE_THRESHOLD: 2.0
+      CORROBORATION_MIN_PEERS: 2
+      SYNAPSE_LOG_FORMAT: json
+      RATE_LIMIT_MSG_PER_SEC: 100
+      RATE_LIMIT_BURST: 20
+      SYNAPSE_CURVE_PUBLICKEY: "${SYNAPSE_CURVE_PUBLICKEY:-}"
+      SYNAPSE_CURVE_SECRETKEY: "${SYNAPSE_CURVE_SECRETKEY:-}"
+      SYNAPSE_CURVE_PEER_KEYS_FILE: "${SYNAPSE_CURVE_PEER_KEYS_FILE:-/config/peer_keys.txt}"
+    networks:
+      - synapse_net
+
+  node-2:
+    restart: unless-stopped
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    ports:
+      - "8082:8080"
+      - "5552:5555"
+    environment:
+      <<: *node_env
+      EXTERNAL_DASHBOARD_URL: "http://localhost:8082"
+    networks:
+      - synapse_net
+
+  node-3:
+    restart: unless-stopped
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    ports:
+      - "8083:8080"
+      - "5553:5555"
+    environment:
+      <<: *node_env
+      EXTERNAL_DASHBOARD_URL: "http://localhost:8083"
+    networks:
+      - synapse_net
+
+  node-4:
+    restart: unless-stopped
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    ports:
+      - "8084:8080"
+      - "5554:5555"
+    environment:
+      <<: *node_env
+      EXTERNAL_DASHBOARD_URL: "http://localhost:8084"
+    networks:
+      - synapse_net
+
+  chaos:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: ["python", "tools/chaos_monkey.py", "--mode", "both", "--intensity", "high"]
+    networks:
+      - synapse_net
+    profiles:
+      - tools
+
+networks:
+  synapse_net:
+    driver: bridge
