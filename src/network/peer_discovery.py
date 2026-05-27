@@ -5,6 +5,11 @@ import os
 import socket
 import struct
 import time
+
+try:
+    from zeroconf import ServiceBrowser, ServiceInfo, ServiceListener, Zeroconf
+except ImportError:
+    pass
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -267,20 +272,207 @@ class BeaconPeerProvider:
         return res
 
 
+class _ZeroconfListener(ServiceListener):
+    def __init__(self, provider: "ZeroconfPeerProvider"):
+        self.provider = provider
+
+    def remove_service(self, zc, type_: str, name: str) -> None:
+        self.provider._on_service_removed(name)
+
+    def add_service(self, zc, type_: str, name: str) -> None:
+        info = zc.get_service_info(type_, name)
+        if info:
+            self.provider._on_service_added(name, info)
+
+    def update_service(self, zc, type_: str, name: str) -> None:
+        pass
+
+
+class ZeroconfPeerProvider:
+    def __init__(
+        self,
+        node_id: str,
+        h3_cell: str,
+        zmq_port: int,
+        dashboard_port: int,
+        external_dashboard_url: str = "",
+        public_key: str = "",
+        zmq_host: str = "0.0.0.0",
+    ):
+        self.node_id = node_id
+        self.h3_cell = h3_cell
+        self.zmq_port = zmq_port
+        self.dashboard_port = dashboard_port
+        self.external_dashboard_url = external_dashboard_url
+        self.public_key = public_key
+        self.zmq_host = self._get_local_ip() if zmq_host == "0.0.0.0" else zmq_host
+        self.service_type = "_synapse._tcp.local."
+        self.service_name = f"Node-{self.node_id}.{self.service_type}"
+
+        self._peers: dict[str, dict] = {}
+        self._callbacks: list[Callable[[str, str, str], None]] = []
+        self._zc: Zeroconf | None = None
+        self._browser: ServiceBrowser | None = None
+        self._info: ServiceInfo | None = None
+
+    def _get_local_ip(self) -> str:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
+
+    async def get_peers(self) -> list[str]:
+        return list(self._peers.keys())
+
+    def on_peer_change(self, callback: Callable[[str, str, str], None]) -> None:
+        self._callbacks.append(callback)
+
+    def _notify_callbacks(self, event: str, host_port: str, node_id: str) -> None:
+        for cb in self._callbacks:
+            try:
+                cb(event, host_port, node_id)
+            except Exception as e:
+                logger.error(f"Error in peer callback: {e}")
+
+    def _on_service_added(self, name: str, info) -> None:
+        if name == self.service_name:
+            return
+
+        props = {}
+        for k, v in info.properties.items():
+            if v:
+                try:
+                    props[k.decode("utf-8")] = v.decode("utf-8")
+                except Exception:
+                    pass
+
+        peer_node_id = props.get("node_id")
+        if not peer_node_id:
+            return
+
+        zmq_host = props.get("zmq_host")
+        if not zmq_host or zmq_host in ("0.0.0.0", "127.0.0.1"):
+            addresses = [socket.inet_ntoa(a) for a in info.addresses]
+            if addresses:
+                zmq_host = addresses[0]
+            else:
+                return
+
+        zmq_port = props.get("zmq_port") or info.port
+        host_port = f"{zmq_host}:{zmq_port}"
+
+        is_new = host_port not in self._peers
+
+        self._peers[host_port] = {
+            "node_id": peer_node_id,
+            "h3_cell": props.get("h3_cell"),
+            "dashboard_port": props.get("dashboard_port"),
+            "external_dashboard_url": props.get("external_dashboard_url", ""),
+            "public_key": props.get("public_key"),
+            "zmq_host": zmq_host,
+            "zmq_port": zmq_port,
+            "service_name": name,
+        }
+
+        if is_new:
+            logger.info(f"Zeroconf discovered peer: {peer_node_id} at {host_port}")
+            self._notify_callbacks("joined", host_port, peer_node_id)
+
+    def _on_service_removed(self, name: str) -> None:
+        to_remove = []
+        for host_port, info in self._peers.items():
+            if info.get("service_name") == name:
+                to_remove.append((host_port, info["node_id"]))
+
+        for host_port, peer_node_id in to_remove:
+            del self._peers[host_port]
+            logger.info(f"Zeroconf peer left: {peer_node_id} at {host_port}")
+            self._notify_callbacks("left", host_port, peer_node_id)
+
+    async def start(self) -> None:
+        self._zc = Zeroconf()
+
+        props = {
+            b"node_id": self.node_id.encode("utf-8"),
+            b"h3_cell": self.h3_cell.encode("utf-8"),
+            b"zmq_host": self.zmq_host.encode("utf-8"),
+            b"zmq_port": str(self.zmq_port).encode("utf-8"),
+            b"dashboard_port": str(self.dashboard_port).encode("utf-8"),
+            b"external_dashboard_url": self.external_dashboard_url.encode("utf-8"),
+            b"public_key": self.public_key.encode("utf-8"),
+        }
+
+        self._info = ServiceInfo(
+            self.service_type,
+            self.service_name,
+            addresses=[socket.inet_aton(self.zmq_host)],
+            port=self.zmq_port,
+            properties=props,
+            server=f"{self.node_id.replace('-', '').lower()}.local.",
+        )
+        self._zc.register_service(self._info)
+
+        self._browser = ServiceBrowser(
+            self._zc, self.service_type, _ZeroconfListener(self)
+        )
+        logger.info(f"ZeroconfPeerProvider started (service={self.service_name})")
+
+    async def stop(self) -> None:
+        if self._zc:
+            if self._info:
+                self._zc.unregister_service(self._info)
+            self._zc.close()
+        logger.info("ZeroconfPeerProvider stopped")
+
+    async def get_peer_pubkey(self, host_port: str) -> str | None:
+        info = self._peers.get(host_port)
+        return info["public_key"] if info else None
+
+    def get_peer_info(self) -> list[dict]:
+        res = []
+        for _host_port, info in self._peers.items():
+            dash_url = info.get("external_dashboard_url")
+            if not dash_url and info.get("dashboard_port"):
+                dash_url = f"http://{info['zmq_host']}:{info['dashboard_port']}"
+            res.append(
+                {
+                    "node_id": info["node_id"],
+                    "h3_cell": info["h3_cell"],
+                    "dashboard_url": dash_url,
+                }
+            )
+        return res
+
+
 def build_peer_provider(discovery: str, **kwargs) -> PeerProvider:
     if discovery == "static":
         return StaticPeerProvider(peers_csv=os.getenv("SYNAPSE_PEERS", ""))
 
-    return BeaconPeerProvider(
+    if discovery == "beacon":
+        return BeaconPeerProvider(
+            node_id=kwargs.get("node_id", "unknown"),
+            h3_cell=kwargs.get("h3_cell", ""),
+            zmq_port=kwargs.get("zmq_port", 5555),
+            dashboard_port=kwargs.get("dashboard_port", 8080),
+            external_dashboard_url=kwargs.get("external_dashboard_url", ""),
+            public_key=os.getenv("SYNAPSE_CURVE_PUBLICKEY", ""),
+            beacon_interval=float(os.getenv("SYNAPSE_BEACON_INTERVAL", "2.0")),
+            beacon_timeout=float(os.getenv("SYNAPSE_BEACON_TIMEOUT", "6.0")),
+            multicast_group=os.getenv("SYNAPSE_BEACON_GROUP", "239.255.77.77"),
+            multicast_port=int(os.getenv("SYNAPSE_BEACON_PORT", "5670")),
+            zmq_host=kwargs.get("zmq_host", "0.0.0.0"),
+        )
+
+    return ZeroconfPeerProvider(
         node_id=kwargs.get("node_id", "unknown"),
         h3_cell=kwargs.get("h3_cell", ""),
         zmq_port=kwargs.get("zmq_port", 5555),
         dashboard_port=kwargs.get("dashboard_port", 8080),
         external_dashboard_url=kwargs.get("external_dashboard_url", ""),
         public_key=os.getenv("SYNAPSE_CURVE_PUBLICKEY", ""),
-        beacon_interval=float(os.getenv("SYNAPSE_BEACON_INTERVAL", "2.0")),
-        beacon_timeout=float(os.getenv("SYNAPSE_BEACON_TIMEOUT", "6.0")),
-        multicast_group=os.getenv("SYNAPSE_BEACON_GROUP", "239.255.77.77"),
-        multicast_port=int(os.getenv("SYNAPSE_BEACON_PORT", "5670")),
         zmq_host=kwargs.get("zmq_host", "0.0.0.0"),
     )

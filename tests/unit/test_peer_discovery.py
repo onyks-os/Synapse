@@ -46,3 +46,21 @@ async def test_beacon_peer_provider():
         # Should discover itself (if multicast loopback works) or just run without error
     finally:
         await provider.stop()
+
+
+def test_build_peer_provider():
+    from src.network.peer_discovery import (
+        BeaconPeerProvider,
+        StaticPeerProvider,
+        ZeroconfPeerProvider,
+        build_peer_provider,
+    )
+
+    provider1 = build_peer_provider("static")
+    assert isinstance(provider1, StaticPeerProvider)
+
+    provider2 = build_peer_provider("beacon")
+    assert isinstance(provider2, BeaconPeerProvider)
+
+    provider3 = build_peer_provider("zeroconf")
+    assert isinstance(provider3, ZeroconfPeerProvider)

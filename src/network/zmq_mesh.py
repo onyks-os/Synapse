@@ -77,6 +77,7 @@ class MeshNode:
         rate_limit: float,
         rate_burst: int,
         context: zmq.asyncio.Context | None = None,
+        max_connections: int = 0,
     ) -> None:
         self.node_id = node_id
         self._h3_cell = h3_cell
@@ -87,6 +88,9 @@ class MeshNode:
         self._sensor_payload_fn = sensor_payload_fn
         self._zscore_threshold = zscore_threshold
         self._min_peers = min_peers
+        self._max_connections = max_connections
+        self._active_connections: set[str] = set()
+        self._discovered_peers: dict[str, str] = {}
 
         self._bucket = _TokenBucket(rate_limit, rate_burst)
         self._ctx = context or zmq.asyncio.Context()
@@ -137,7 +141,30 @@ class MeshNode:
         # Connect to existing peers
         peers = await self._peer_provider.get_peers()
         for p in peers:
-            await self._connect_peer(p)
+            # Self-connection filter
+            parts = p.split(":")
+            if len(parts) == 2:
+                try:
+                    port = int(parts[1])
+                    if port == self._bind_port and parts[0] in (
+                        "127.0.0.1",
+                        "0.0.0.0",
+                        "localhost",
+                        "::1",
+                    ):
+                        continue
+                except ValueError:
+                    pass
+            self._discovered_peers[p] = "unknown"
+
+        if self._max_connections > 0:
+            # Connect only to the first X peers
+            for p in list(self._discovered_peers.keys())[: self._max_connections]:
+                await self._connect_peer(p)
+        else:
+            for p in peers:
+                if p in self._discovered_peers:
+                    await self._connect_peer(p)
 
         # Register for dynamic peer changes
         self._peer_provider.on_peer_change(self._on_peer_change)
@@ -155,6 +182,24 @@ class MeshNode:
         ]
 
     async def _connect_peer(self, host_port: str) -> None:
+        if host_port in self._active_connections:
+            return
+
+        # Self-connection filter
+        parts = host_port.split(":")
+        if len(parts) == 2:
+            try:
+                port = int(parts[1])
+                if port == self._bind_port and parts[0] in (
+                    "127.0.0.1",
+                    "0.0.0.0",
+                    "localhost",
+                    "::1",
+                ):
+                    return
+            except ValueError:
+                pass
+
         sub_socket = self._sub_socket
         if sub_socket is None:
             logger.warning(
@@ -176,20 +221,58 @@ class MeshNode:
                 client_secretkey=self._curve_secretkey or "",
             )
         sub_socket.connect(f"tcp://{host_port}")
+        self._active_connections.add(host_port)
         logger.info(f"[Node:{self.node_id}] Connected SUB to {host_port}")
 
     def _on_peer_change(self, event: str, host_port: str, peer_node_id: str) -> None:
         if event == "joined":
-            asyncio.create_task(self._connect_peer(host_port))
+            # Self-connection filter
+            parts = host_port.split(":")
+            if len(parts) == 2:
+                try:
+                    port = int(parts[1])
+                    if port == self._bind_port and parts[0] in (
+                        "127.0.0.1",
+                        "0.0.0.0",
+                        "localhost",
+                        "::1",
+                    ):
+                        return
+                except ValueError:
+                    pass
+            self._discovered_peers[host_port] = peer_node_id
+            if (
+                self._max_connections == 0
+                or len(self._active_connections) < self._max_connections
+            ):
+                asyncio.create_task(self._connect_peer(host_port))
         elif event == "left":
-            try:
-                if self._sub_socket:
-                    self._sub_socket.disconnect(f"tcp://{host_port}")
-                    logger.info(
-                        f"[Node:{self.node_id}] Disconnected SUB from {host_port}"
-                    )
-            except Exception as e:
-                logger.error(f"Error disconnecting peer: {e}")
+            self._discovered_peers.pop(host_port, None)
+            if host_port in self._active_connections:
+                try:
+                    if self._sub_socket:
+                        self._sub_socket.disconnect(f"tcp://{host_port}")
+                        logger.info(
+                            f"[Node:{self.node_id}] Disconnected SUB from {host_port}"
+                        )
+                except Exception as e:
+                    logger.error(f"Error disconnecting peer: {e}")
+                finally:
+                    self._active_connections.discard(host_port)
+
+                # Dynamic Failover: reconnect to another candidate if below limit
+                if (
+                    self._max_connections > 0
+                    and len(self._active_connections) < self._max_connections
+                ):
+                    candidates = [
+                        p
+                        for p in self._discovered_peers
+                        if p not in self._active_connections
+                    ]
+                    if candidates:
+                        next_peer = candidates[0]
+                        asyncio.create_task(self._connect_peer(next_peer))
 
     def stop(self) -> None:
         self._running = False

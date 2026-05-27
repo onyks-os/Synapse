@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "synapse.fullname" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "synapse.name" . }}
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "synapse.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "synapse.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: synapse-node
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: NODE_TYPE
+              value: {{ .Values.node.type | quote }}
+            - name: SYNAPSE_LOG_FORMAT
+              value: {{ .Values.node.logFormat | quote }}
+            - name: SYNAPSE_REGISTRY_DB
+              value: "/data/registry.db"
+          ports:
+            - name: mesh
+              containerPort: 5555
+              protocol: TCP
+            - name: dashboard
+              containerPort: 8080
+              protocol: TCP
+          volumeMounts:
+            - name: synapse-data
+              mountPath: /data
+
+        - name: caddy-proxy
+          image: "{{ .Values.caddy.image.repository }}:{{ .Values.caddy.image.tag }}"
+          imagePullPolicy: {{ .Values.caddy.image.pullPolicy }}
+          ports:
+            - name: https
+              containerPort: 443
+              hostPort: {{ .Values.service.dashboardPort }}
+              protocol: TCP
+          volumeMounts:
+            - name: caddy-config
+              mountPath: /etc/caddy/Caddyfile
+              subPath: Caddyfile
+              readOnly: true
+            - name: caddy-data
+              mountPath: /data
+            - name: caddy-config-dir
+              mountPath: /config
+
+      volumes:
+        - name: synapse-data
+          hostPath:
+            path: {{ .Values.persistence.hostPath }}
+            type: DirectoryOrCreate
+        - name: caddy-config
+          configMap:
+            name: {{ include "synapse.fullname" . }}-caddy-config
+        - name: caddy-data
+          emptyDir: {}
+        - name: caddy-config-dir
+          emptyDir: {}

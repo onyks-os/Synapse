@@ -6,11 +6,13 @@ Starts the MeshNode, GarbageCollector, and DashboardServer.
 """
 
 import asyncio
+import json
 import logging
 import os
 import random
 import signal
 import socket
+import sys
 
 import h3
 import zmq.asyncio
@@ -22,10 +24,41 @@ from src.network.http_server import DashboardServer
 from src.network.peer_discovery import build_peer_provider
 from src.network.zmq_mesh import MeshNode
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
-)
+
+class JSONFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        log_record = {
+            "timestamp": self.formatTime(record, self.datefmt),
+            "level": record.levelname,
+            "name": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            log_record["exc_info"] = self.formatException(record.exc_info)
+        return json.dumps(log_record)
+
+
+def setup_logging() -> None:
+    log_format = os.getenv("SYNAPSE_LOG_FORMAT", "text").strip().lower()
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+
+    handler = logging.StreamHandler(sys.stdout)
+    if log_format == "json":
+        handler.setFormatter(JSONFormatter())
+    else:
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s - %(message)s")
+        )
+
+    root_logger.addHandler(handler)
+
+
+setup_logging()
 logger = logging.getLogger("Synapse.node")
 
 
@@ -73,7 +106,7 @@ async def main() -> None:
     dashboard_port = int(os.getenv("DASHBOARD_PORT", "8080"))
     dashboard_host = os.getenv("DASHBOARD_HOST", "127.0.0.1")
     external_url = os.getenv("EXTERNAL_DASHBOARD_URL", "")
-    discovery = os.getenv("SYNAPSE_DISCOVERY", "beacon").strip().lower()
+    discovery = os.getenv("SYNAPSE_DISCOVERY", "zeroconf").strip().lower()
 
     death_timeout = float(os.getenv("DEATH_TIMEOUT", "3.0"))
     eviction_ttl = float(os.getenv("EVICTION_TTL", "10.0"))
@@ -85,6 +118,7 @@ async def main() -> None:
     ping_interval = float(os.getenv("PING_INTERVAL", "1.0"))
     registry_db = os.getenv("SYNAPSE_REGISTRY_DB", "").strip()
     sqlite_path = registry_db if registry_db else None
+    max_connections = int(os.getenv("SYNAPSE_MAX_CONNECTIONS", "0"))
 
     # 3. Components
     registry = NodeRegistry(
@@ -127,6 +161,7 @@ async def main() -> None:
         rate_limit=rate_limit,
         rate_burst=rate_burst,
         context=ctx,
+        max_connections=max_connections,
     )
 
     dashboard = DashboardServer(
@@ -143,7 +178,7 @@ async def main() -> None:
     loop = asyncio.get_running_loop()
 
     def _shutdown(sig: signal.Signals) -> None:
-        logger.info("Received %s — shutting down gracefully…", sig.name)
+        logger.info("Received %s, shutting down gracefully...", sig.name)
         mesh.stop()
         gc.stop()
         asyncio.create_task(peer_provider.stop())

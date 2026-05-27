@@ -125,6 +125,14 @@ EVICTION_TTL=10.0
 MONITOR_PORT=5555
 DASHBOARD_PORT=8080
 
+# Discovery settings (ZTP)
+# Options: "zeroconf" (default, mDNS), "beacon" (UDP Multicast), "static" (CSV)
+SYNAPSE_DISCOVERY=zeroconf
+
+# Peering settings
+# Max active connections per node (0 = unlimited / full-mesh)
+SYNAPSE_MAX_CONNECTIONS=8
+
 # Sensor settings
 PING_INTERVAL=1.0
 H3_RESOLUTION=7
@@ -204,4 +212,47 @@ services:
       - Synapse_net
 ```
 
-Nota: usa `sensor_0000`, `sensor_0001`, ... in base al `--node-id-template` usato nello script. L’esempio sopra assume il default `sensor_{i:04d}`.
+Nota: usa `sensor_0000`, `sensor_0001`, ... in base al `--node-id-template` usato nello script. L'esempio sopra assume il default `sensor_{i:04d}`.
+
+## Option 3: Kubernetes via Helm (Edge Production)
+
+For production deployment on physical edge clusters (e.g., K3s, MicroK8s), Synapse provides an official Helm chart implementing a DaemonSet architecture with a secure Caddy sidecar.
+
+### 1. Architectural Overview
+
+The Helm chart encapsulates:
+- **Synapse Node**: The core daemon process.
+- **Caddy Proxy Sidecar**: A reverse proxy container within the same Pod terminating TLS and exposing the dashboard securely over HTTPS.
+- **ConfigMap**: Dynamic injection of the `Caddyfile`.
+- **HostPath Persistence**: Local hardware storage mapping to persist the SQLite registry across Pod restarts.
+
+### 2. Configuration and Values
+
+Default parameters are stored in `charts/synapse/values.yaml`. Key configurations include:
+
+- `image.repository` / `image.tag`: The Docker image to deploy (default: `ghcr.io/onyks-os/synapse-node:latest`).
+- `persistence.hostPath`: The absolute path on the physical edge device where SQLite data is saved (default: `/var/lib/synapse/data`).
+- `caddyfile`: The raw Caddy configuration string.
+
+### 3. Installation
+
+From the repository root, install the chart directly into your cluster:
+
+```bash
+helm install synapse-edge ./charts/synapse
+```
+
+To override values during installation:
+
+```bash
+helm install synapse-edge ./charts/synapse \
+  --set persistence.hostPath=/opt/synapse/data \
+  --set node.logFormat=text
+```
+
+### 4. Continuous Deployment (CD) and Chaos Engineering (CI)
+
+The project includes an automated GitHub Actions pipeline to ensure production readiness:
+
+- **Continuous Integration (`ci.yml`)**: On every push and pull request, the pipeline builds an isolated environment to run full static analysis (`mypy`, `ruff`), executes unit testing (`pytest`), and dynamically lints the Helm charts. Furthermore, it spins up a full Docker Compose topology and runs the `tools/ci_chaos_smoke.py` suite. This forcefully injects ZMQ anomalies into the network to guarantee the runtime resilience of the mesh before merging code.
+- **Continuous Deployment (`cd.yml`)**: On every release, it automatically builds multi-architecture Docker images (`linux/amd64`, `linux/arm64`) using QEMU and pushes them to the GitHub Container Registry (GHCR). It also publishes Python packages to PyPI via OIDC Trusted Publishing.

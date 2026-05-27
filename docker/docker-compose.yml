@@ -5,13 +5,12 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.node
     ports:
-      - "8081:8080"
       - "5551:5555"
     environment: &node_env
       SYNAPSE_ZMQ_PORT: 5555
       DASHBOARD_PORT: 8080
       DASHBOARD_HOST: "0.0.0.0"
-      EXTERNAL_DASHBOARD_URL: "http://localhost:8081"
+      EXTERNAL_DASHBOARD_URL: "https://localhost:8441"
       SYNAPSE_DISCOVERY: beacon
       LAT_MIN: 45.46
       LAT_MAX: 45.47
@@ -33,19 +32,50 @@ services:
     networks:
       - synapse_net
 
+  caddy-1:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "8441:443"
+    environment:
+      UPSTREAM_NODE: node-1
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro,z
+      - caddy_data_1:/data
+      - caddy_config_1:/config
+    networks:
+      - synapse_net
+    depends_on:
+      - node-1
+
   node-2:
     restart: unless-stopped
     build:
       context: ..
       dockerfile: docker/Dockerfile.node
     ports:
-      - "8082:8080"
       - "5552:5555"
     environment:
       <<: *node_env
-      EXTERNAL_DASHBOARD_URL: "http://localhost:8082"
+      EXTERNAL_DASHBOARD_URL: "https://localhost:8442"
     networks:
       - synapse_net
+
+  caddy-2:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "8442:443"
+    environment:
+      UPSTREAM_NODE: node-2
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro,z
+      - caddy_data_2:/data
+      - caddy_config_2:/config
+    networks:
+      - synapse_net
+    depends_on:
+      - node-2
 
   node-3:
     restart: unless-stopped
@@ -53,13 +83,28 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.node
     ports:
-      - "8083:8080"
       - "5553:5555"
     environment:
       <<: *node_env
-      EXTERNAL_DASHBOARD_URL: "http://localhost:8083"
+      EXTERNAL_DASHBOARD_URL: "https://localhost:8443"
     networks:
       - synapse_net
+
+  caddy-3:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "8443:443"
+    environment:
+      UPSTREAM_NODE: node-3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data_3:/data
+      - caddy_config_3:/config
+    networks:
+      - synapse_net
+    depends_on:
+      - node-3
 
   node-4:
     restart: unless-stopped
@@ -67,21 +112,56 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.node
     ports:
-      - "8084:8080"
       - "5554:5555"
     environment:
       <<: *node_env
-      EXTERNAL_DASHBOARD_URL: "http://localhost:8084"
+      EXTERNAL_DASHBOARD_URL: "https://localhost:8444"
     networks:
       - synapse_net
+
+  caddy-4:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "8444:443"
+    environment:
+      UPSTREAM_NODE: node-4
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data_4:/data
+      - caddy_config_4:/config
+    networks:
+      - synapse_net
+    depends_on:
+      - node-4
 
   chaos:
     build:
       context: ..
       dockerfile: docker/Dockerfile.node
+    security_opt:
+      - label:disable
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock:z
     command: ["python", "tools/chaos_monkey.py", "--mode", "both", "--intensity", "high"]
+    networks:
+      - synapse_net
+    profiles:
+      - tools
+
+  pumba:
+    image: ghcr.io/alexei-led/pumba:latest
+    restart: on-failure
+    privileged: true
+    volumes:
+      - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock:z
+    command: >
+      --interval 2m
+      netem
+      --duration 1m
+      --tc-image gaiadocker/iproute2
+      delay --time 200 --jitter 50
+      "re2:^docker-node-\\d+"
     networks:
       - synapse_net
     profiles:
@@ -90,3 +170,13 @@ services:
 networks:
   synapse_net:
     driver: bridge
+
+volumes:
+  caddy_data_1:
+  caddy_config_1:
+  caddy_data_2:
+  caddy_config_2:
+  caddy_data_3:
+  caddy_config_3:
+  caddy_data_4:
+  caddy_config_4:

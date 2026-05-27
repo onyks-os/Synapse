@@ -43,6 +43,15 @@ How strictly neighbours are compared is controlled on the **monitor** (restart r
 
 Details: `docs/TDD.md` §4.5–4.6 and `docs/FORMALISM.md` §3.
 
+### 2.4. Peering and Network Limits (operators)
+
+To scale the P2P mesh network to a large number of nodes, you can configure active connection limits and discovery types:
+
+| Variable | Typical use |
+| -------- | ----------- |
+| `SYNAPSE_MAX_CONNECTIONS` | Limit the maximum number of active TCP ZMQ SUB connections per node (default `0` = unlimited / full-mesh). A value of `8` to `12` is recommended for larger networks to prevent high CPU load and socket exhaustion. |
+| `SYNAPSE_DISCOVERY` | Peer discovery protocol: `zeroconf` (default, mDNS), `beacon` (UDP Multicast), or `static` (CSV peer list). |
+
 ## 3. Testing Resilience with the Chaos Monkey
 
 `chaos_monkey.py` is a command-line tool included with the project to test the robustness and resilience of the Synapse system. It simulates various types of failures that can occur in a real-world network.
@@ -102,3 +111,32 @@ This command will run all types of attacks at medium intensity for a total durat
 ```bash
 python tools/chaos_monkey.py --mode both --intensity medium --duration 120
 ```
+
+## 4. Network Emulation Chaos Engineering (Pumba)
+
+To test the resilience of the ZeroMQ P2P mesh network under physical network degradation, Synapse integrates **Pumba**, an industry-standard Docker chaos tool. 
+
+Pumba intercepts the network stack of the nodes and injects network delay (latency with jitter) and packet loss via the Linux kernel's `tc` (Traffic Control) subsystem.
+
+### 4.1. Network Chaos Mode Details
+By default, the Pumba service is configured to:
+* Target all sensor and main nodes matching the pattern `docker-node-`.
+* Inject **200ms of latency** (with a `+-50ms` random jitter).
+* Inject **15% packet loss** on all incoming and outgoing connections.
+* Run network degradation blocks for **1 minute**, alternating with **2 minutes** of normal network operations (allowing you to witness dynamic self-healing and recovery).
+
+### 4.2. Running Network Chaos
+
+To start injecting network latency and packet loss into the running Docker Compose network:
+
+```bash
+make chaos-network
+```
+
+To stop the network chaos injection and immediately restore network stability:
+
+```bash
+make chaos-network-stop
+```
+
+During network degradation, you can monitor the node logs and the dashboard to observe how the active connection management, rate limiter, and corroboration engine handle packet drops and latency spikes gracefully!

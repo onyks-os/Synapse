@@ -22,7 +22,7 @@ The system is designed to be *edge-first*, where the logic of geographic proximi
   - Execute **spatial corroboration** logic on incoming data to detect anomalies.
   - Provide an HTTP API and a localized web dashboard.
 - **Technologies**:
-  - **ZMQ (ZeroMQ)**: Uses a **PUB** socket (bind) to broadcast telemetry and a **SUB** socket (connect) to dynamically ingest data from discovered peers.
+  - **ZMQ (ZeroMQ)**: Uses a **PUB** socket (bind) to broadcast telemetry and a **SUB** socket (connect) to dynamically ingest data from discovered peers. It supports **Active Connection Management**, allowing each node to limit its ZMQ SUB sockets to $X$ active connections with dynamic failover (automatically replacing disconnected peers from a pool of reserve peers) and automatic loopback self-filtering to prevent self-peering.
   - **Flask**: Serves the web UI and metrics.
   - **H3**: Uber's Hexagonal Hierarchical Spatial Index for geographic filtering.
 

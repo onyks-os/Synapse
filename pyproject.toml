@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "Synapse"
-version = "1.0.0"
-description = "Decentralized P2P Headless Daemon — Edge-First IoT Network"
+version = "0.2.0"
+description = "Decentralized P2P Headless Daemon - Edge-First IoT Network"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
@@ -13,6 +13,8 @@ dependencies = [
     "pyzmq>=26.0",
     "h3>=3.7",
     "flask>=3.0",
+    "waitress>=3.0",
+    "zeroconf>=0.132.0",
 ]
 
 [project.optional-dependencies]
@@ -21,6 +23,9 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.9",
     "mypy>=1.15",
+    "types-waitress",
+    "build",
+    "twine",
 ]
 
 chaos = [

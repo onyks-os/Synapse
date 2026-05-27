@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-05-28
+
+### Added
+
+- **Active Connection Management:** Bounded peering via `SYNAPSE_MAX_CONNECTIONS` env var. Each node connects only to the first *X* discovered peers and keeps the rest in a reserve queue. When an active peer drops, the node automatically reconnects to a reserve candidate, keeping the target degree constant (`src/network/zmq_mesh.py`).
+- **Self-Peering Filter:** Nodes now actively filter their own ZMQ bind address from the discovered peer list, preventing self-connections that would waste socket slots.
+- **Native Benchmark Suite:** `tools/benchmark.py` — orchestrates up to 50 in-process simulated nodes (via `subprocess.Popen`) with static peer discovery, measures mesh convergence time and aggregate throughput. Run with `make benchmark` or `make benchmark NODES=N`. Validated results: 50 nodes converge in < 3s at 2476 msg/s (full-mesh); bounded mesh (X=8) achieves same convergence 17% faster with 84% fewer TCP sockets.
+- **Pumba Network Chaos Integration:** Added `pumba` service to `docker/docker-compose.yml` under the `tools` profile. Injects configurable latency and packet loss onto sensor containers via `iproute2`. New Makefile targets: `make chaos-network` (start) and `make chaos-network-stop` (restore).
+- **Glassmorphic Operator Dashboard:** Complete visual overhaul of `src/dashboard/index.html`. Full-screen Leaflet map with floating glassmorphic panels, neutral charcoal dark theme, H3 hex overlays colored by node status. Features: real-time client-side search and status filters (ALL / ALIVE / FAULTY / DEAD), click-to-pan map rows, SVG radial health gauge, Chaos Engineering command console with clipboard copy, retro event terminal with differential-polling log events. Telemetry values displayed as `°C`.
+- **Kubernetes Helm Chart:** `charts/synapse/` — official Helm chart for Edge deployment on K3s/MicroK8s. Configurable via `values.yaml` (Caddy proxy, SQLite persistence via `hostPath`).
+- **Continuous Deployment (CD):** `.github/workflows/cd.yml` — on every versioned tag, builds multi-architecture Docker images (amd64, arm64) and pushes to GHCR; publishes Python library to PyPI via OIDC Trusted Publishing (no stored secrets).
+- **New Unit Tests:** `test_http_server.py`, `test_main_node.py`, `test_zeroconf_discovery.py`, `test_zmq_curve.py`, `test_zmq_mesh_limits.py` — total test suite now at **80 tests**.
+
+### Changed
+
+- **`make verify`:** Now runs ruff auto-fix + format, pytest, mypy, and the chaos smoke integration test in a single command. Ends with `"Verification complete. The codebase is ready for release."` only if all steps pass.
+- **Makefile:** Rewrote from scratch with full target documentation, rootless Podman socket auto-detection, and `--remove-orphans` cleanup.
+- **`docker-compose.yml`:** Added `chaos` and `pumba` services under the `tools` profile; suppressed compose orphan warnings via `PODMAN_COMPOSE_WARNING_LOGS=false`.
+- **Documentation:** Updated `docs/USER_GUIDE.md`, `docs/DEPLOYMENT.md`, and `docs/ARCHITECTURE.md` to cover Active Connection Management, the benchmark suite, Pumba chaos injection, and the new dashboard.
+
+### Fixed
+
+- **Pumba flags:** Corrected the `netem` subcommand arguments — removed the invalid `-lo` flag and set proper `--duration`, `--delay`, and `--loss` parameters compatible with the `ghcr.io/alexei-led/pumba` image.
+- **Chaos Monkey Docker dependency:** Moved the `docker` Python SDK to an optional dependency group (`chaos`) in `pyproject.toml` so the base image doesn't install it unconditionally.
+
 ## [0.1.0] - 2026-05-23
 
 ### Added

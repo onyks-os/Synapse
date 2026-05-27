@@ -33,6 +33,7 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
+import waitress
 from flask import Flask, Response, abort, jsonify, request
 
 from src.core.node_registry import NodeRegistry
@@ -61,7 +62,11 @@ def create_app(
     peer_info_fn: Callable[[], list[dict]] | None = None,
     identity: dict | None = None,
 ) -> Flask:
-    app = Flask(__name__, static_folder=None)
+    app = Flask(
+        __name__,
+        static_url_path="/assets",
+        static_folder=str(_DASHBOARD_DIR / "assets"),
+    )
     # Suppress Flask's default request logger to keep node logs clean
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
     token = _effective_api_token(api_token)
@@ -222,14 +227,14 @@ class DashboardServer:
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
-        """Start Flask in a daemon thread."""
+        """Start Flask in a daemon thread using Waitress."""
         self._thread = threading.Thread(
-            target=self._app.run,
+            target=waitress.serve,
+            args=(self._app,),
             kwargs={
                 "host": self._host,
                 "port": self._port,
-                "debug": False,
-                "use_reloader": False,
+                "clear_untrusted_proxy_headers": True,
             },
             daemon=True,
             name="Synapse-dashboard",
