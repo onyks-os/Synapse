@@ -1,0 +1,45 @@
+# Compose-based resilience smoke: floods the monitor ZMQ ingest with garbage and
+# asserts /ready stays HTTP 200. Weekly + manual — intentionally not on every PR
+# (runtime + Docker build; occasional flakes possible under load).
+name: Chaos smoke
+
+on:
+  schedule:
+    - cron: "0 12 * * 1" # Monday 12:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: chaos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  chaos-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[dev]"
+
+      - name: Build and start Compose stack
+        run: docker compose -f docker/docker-compose.yml up -d --build
+
+      - name: Run ZMQ garbage burst smoke test
+        run: |
+          python tools/ci_chaos_smoke.py \
+            --http http://127.0.0.1:8081/ready \
+            --zmq tcp://127.0.0.1:5551
+
+      - name: Tear down Compose
+        if: always()
+        run: docker compose -f docker/docker-compose.yml down -v

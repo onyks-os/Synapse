@@ -1,0 +1,34 @@
+image:
+  repository: ghcr.io/onyks-os/synapse-node
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+caddy:
+  image:
+    repository: caddy
+    tag: "2.7-alpine"
+    pullPolicy: IfNotPresent
+
+node:
+  # The type of node (e.g. edge-sensor, gateway)
+  type: "edge-sensor"
+  # Log format: 'json' or 'text'
+  logFormat: "json"
+
+persistence:
+  # The path on the host machine where the SQLite database will be persistently stored.
+  # Using hostPath ensures the data survives Pod restarts on that specific physical edge node.
+  hostPath: /var/lib/synapse/data
+
+service:
+  type: ClusterIP
+  dashboardPort: 8441
+  meshPort: 5555
+
+caddyfile: |
+  # Caddy proxy configuration
+  # By default, since both containers are in the same Pod, Caddy proxies to localhost:8080
+  localhost, 127.0.0.1 {
+      tls internal
+      reverse_proxy localhost:8080
+  }
