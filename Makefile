@@ -36,6 +36,7 @@ start: ## Start the P2P Mesh network in the background
 	@PODMAN_COMPOSE_WARNING_LOGS=false docker compose -f docker/docker-compose.yml up -d --build --remove-orphans
 
 stop: ## Stop the P2P network containers
+	@PODMAN_COMPOSE_WARNING_LOGS=false docker compose -f docker/docker-compose.yml --profile tools stop chaos pumba 2>/dev/null || true
 	@PODMAN_COMPOSE_WARNING_LOGS=false docker compose -f docker/docker-compose.yml down
 
 logs: ## Show the container logs in real time
