@@ -210,3 +210,7 @@ __marimo__/
 ignore
 *.ignore.*
 *.sh
+
+# Local build tool binaries (downloaded at dev-time, not for VCS)
+tailwindcss
+tailwindcss-*
